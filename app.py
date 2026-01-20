@@ -5,7 +5,7 @@ import plotly.express as px
 # --- ページ設定 ---
 st.set_page_config(page_title="Annual Portfolio Rebalancer (Man-Yen)", layout="wide")
 
-st.title("⚖️ 年次ポートフォリオ・リバランス計算機")
+st.title("⚖️ ポートフォリオ・リバランス")
 st.markdown("全ての単位は **「万円」** です。年に一回、資産配分を目標比率（60:10:30）に戻すために使ってください。")
 
 # --- サイドバー：入力エリア ---
