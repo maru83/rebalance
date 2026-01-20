@@ -6,7 +6,7 @@ import plotly.express as px
 st.set_page_config(page_title="Annual Portfolio Rebalancer (Man-Yen)", layout="wide")
 
 st.title("⚖️ ポートフォリオ・リバランス")
-st.markdown("全ての単位は **「万円」** です。年に一回、資産配分を目標比率（60:10:30）に戻すために使ってください。")
+st.markdown("全ての単位は **「万円」** です。年に一回、資産配分を目標比率に戻すために使ってください。")
 
 # --- サイドバー：入力エリア ---
 st.sidebar.header("1. 目標比率の設定 (%)")
