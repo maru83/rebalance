@@ -18,10 +18,10 @@ def get_market_fear():
     return None
 
 # --- ページ設定 ---
-st.set_page_config(page_title="Annual Portfolio Rebalancer", layout="wide")
+st.set_page_config(page_title="Annual Portfolio Allocator", layout="wide")
 
-st.title("⚖️ ポートフォリオ・リバランス")
-st.markdown("年に一回、資産配分を目標比率に戻すために使ってください。")
+st.title("⚖️ ポートフォリオ・リバランス (資金配分版)")
+st.markdown("今年投入する追加資金を、目標比率に近づくように自動配分します。")
 
 # --- サイドバー：入力エリア ---
 st.sidebar.header("1. 目標比率の設定 (%)")
@@ -43,31 +43,50 @@ current_cash = st.sidebar.number_input("現在の現金保有額", value=200, st
 
 st.sidebar.markdown("---")
 
-st.sidebar.header("3. 追加資金 (任意)")
-st.sidebar.caption("リバランスと同時に追加投資（ボーナス等）をする場合は入力してください。")
-additional_fund = st.sidebar.number_input("今回投入する資金 (万円)", value=0, step=5)
+st.sidebar.header("3. 追加資金 (万円)")
+st.sidebar.caption("今年一年で追加する資金（積立総額＋ボーナス＋貯金）を入力してください。")
+additional_fund = st.sidebar.number_input("今回投入する資金合計", value=100, step=10)
 
 # --- 計算ロジック ---
 
-# 現在の合計資産 + 追加資金
-total_assets = current_orkan + current_gold + current_cash + additional_fund
+# 1. リバランス後の総資産予測 (現在額 + 追加資金)
+projected_total_assets = current_orkan + current_gold + current_cash + additional_fund
 
-# 目標となる金額（あるべき姿）
-ideal_orkan = total_assets * (target_orkan / 100)
-ideal_gold = total_assets * (target_gold / 100)
-ideal_cash = total_assets * (target_cash / 100)
+# 2. リバランス後にあるべき理想の金額 (Target Amount)
+ideal_orkan = projected_total_assets * (target_orkan / 100)
+ideal_gold = projected_total_assets * (target_gold / 100)
+ideal_cash = projected_total_assets * (target_cash / 100)
 
-# 差額（プラスなら買い、マイナスなら売り）
-diff_orkan = ideal_orkan - current_orkan
-diff_gold = ideal_gold - current_gold
-diff_cash = ideal_cash - current_cash
+# 3. 現状とのギャップ (理想 - 現在) = 不足している金額
+gap_orkan = ideal_orkan - current_orkan
+gap_gold = ideal_gold - current_gold
+gap_cash = ideal_cash - current_cash
+
+# 4. 配分ロジック (Allocation Logic)
+# 不足分（プラス）だけを取り出す
+pos_gap_orkan = max(0, gap_orkan)
+pos_gap_gold = max(0, gap_gold)
+pos_gap_cash = max(0, gap_cash)
+total_positive_gap = pos_gap_orkan + pos_gap_gold + pos_gap_cash
+
+# 追加資金の配分計算
+if total_positive_gap > 0:
+    # 不足分の比率に応じて資金を山分け
+    alloc_orkan = additional_fund * (pos_gap_orkan / total_positive_gap)
+    alloc_gold = additional_fund * (pos_gap_gold / total_positive_gap)
+    alloc_cash = additional_fund * (pos_gap_cash / total_positive_gap)
+else:
+    # 全ての資産が超過している場合（稀なケース）は比率通り配分
+    alloc_orkan = additional_fund * (target_orkan / 100)
+    alloc_gold = additional_fund * (target_gold / 100)
+    alloc_cash = additional_fund * (target_cash / 100)
 
 # --- メイン画面 ---
 
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
-    st.subheader("📊 現在の配分状況")
+    st.subheader("📊 現在のポートフォリオ")
     
     # 円グラフ用データ
     df_chart = pd.DataFrame({
@@ -80,70 +99,75 @@ with col1:
                  color_discrete_map={'オルカン':'royalblue', 'ゴールド':'gold', 'キャッシュ':'lightgray'})
     st.plotly_chart(fig, use_container_width=True)
     
-    st.info(f"資産合計: **{total_assets - additional_fund:,.1f} 万円**")
-    if additional_fund > 0:
-        st.success(f"＋ 追加資金: **{additional_fund:,.1f} 万円**")
+    st.info(f"現在の総資産: **{current_orkan+current_gold+current_cash:,.1f} 万円**")
+    st.success(f"＋ 今回の追加: **{additional_fund:,.1f} 万円**")
 
 with col2:
     st.subheader("🛠 リバランス指示書")
-    st.write("目標比率に戻すためのアクション：")
     
-    # 結果を見やすく整形
-    data = []
-    assets = [("オルカン", diff_orkan), ("ゴールド", diff_gold), ("キャッシュ", diff_cash)]
-    
-    for name, val in assets:
-        action = ""
-        amount = 0
+    if additional_fund <= 0:
+        st.warning("左側のサイドバーで「追加資金」を入力してください。")
+    else:
+        st.write(f"追加資金 **{additional_fund:,.1f} 万円** の最適な配分は以下の通りです。")
         
-        # 0.1万円（1000円）未満の差は無視する設定
-        if val > 0.1: 
-            action = "🟢 買い (安値)"
-            amount = f"{val:,.1f} 万円"
-        elif val < -0.1: 
-            action = "🔴 売り (高値)"
-            amount = f"{abs(val):,.1f} 万円"
-        else:
-            action = "⚪️ 維持 (Hold)"
-            amount = "0 万円"
+        # テーブルデータの作成
+        # リスト構成: [資産名, ギャップ値(判定用), 配分額(計算結果)]
+        assets_info = [
+            ("オルカン (株式)", gap_orkan, alloc_orkan),
+            ("ゴールド (金)", gap_gold, alloc_gold),
+            ("キャッシュ (現金)", gap_cash, alloc_cash)
+        ]
+        
+        table_data = []
+        for name, val, alloc in assets_info:
+            # 判定ロジック
+            if val > 0.1: 
+                action = "🟢 買い (安値)"
+            elif val < -0.1: 
+                action = "🔴 売り (高値)"
+            else:
+                action = "⚪️ 維持 (Hold)"
             
-        data.append([name, action, amount])
+            # 配分額のフォーマット
+            amount_str = f"{alloc:,.1f} 万円"
+            
+            table_data.append([name, action, amount_str])
+            
+        df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額"])
         
-    df_res = pd.DataFrame(data, columns=["資産クラス", "アクション", "金額"])
-    
-    # テーブル表示
-    st.table(df_res)
+        # テーブル表示
+        st.table(df_res)
+        
+        # 具体的なアドバイス
+        st.markdown("### 📝 具体的な手順")
+        
+        if alloc_cash > 0:
+             st.write(f"- 銀行口座に **{alloc_cash:,.1f} 万円** をそのまま貯金（または国債購入）してください。")
+             
+        invest_total = alloc_orkan + alloc_gold
+        if invest_total > 0:
+            st.write(f"- 証券口座で合計 **{invest_total:,.1f} 万円** の注文を出してください。")
+            if alloc_orkan > 0:
+                st.write(f"  - うち **{alloc_orkan:,.1f} 万円** でオルカンを購入")
+            if alloc_gold > 0:
+                st.write(f"  - うち **{alloc_gold:,.1f} 万円** でゴールドを購入")
     
     st.markdown("---")
 
-    # --- ここにVIX指数を移動 ---
+    # --- VIX指数エリア ---
     st.subheader("📉 市場の温度感")
     
     vix = get_market_fear()
     if vix:
-        # メイン画面用の表示 (st.metricを使用)
         st.metric(label="VIX指数 (恐怖指数)", value=f"{vix:.2f}")
         
-        # VIXの水準によるアドバイス
         if vix > 30:
-            st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。安易な狼狽売りは避けましょう。")
+            st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。積極的な配分を検討しても良いでしょう。")
         elif vix > 20:
-            st.warning("⚠️ **警戒水準**\n\n少し市場が不安定です。値動きに注意してください。")
+            st.warning("⚠️ **警戒水準**\n\n少し市場が不安定です。")
         elif vix < 15:
-            st.success("✅ **楽観相場**\n\n市場は落ち着いていますが、株価が高すぎる可能性もあります。")
+            st.success("✅ **楽観相場**\n\n株価が高すぎる可能性があります。高値掴みに注意してください。")
         else:
-            st.info("ℹ️ **通常運転**\n\n平穏な相場です。淡々とリバランスを行いましょう。")
+            st.info("ℹ️ **通常運転**\n\n平穏な相場です。計算通りの配分で問題ありません。")
     else:
         st.caption("※VIX指数の取得に失敗しました")
-
-# --- シミュレーション ---
-with st.expander("詳細データ: リバランス後の姿"):
-    st.write(f"リバランスを実施すると、資産合計は **{int(total_assets):,} 万円** になり、比率は以下のようになります。")
-    
-    df_after = pd.DataFrame({
-        "資産クラス": ["オルカン", "ゴールド", "キャッシュ"],
-        "金額": [f"{ideal_orkan:,.1f} 万円", f"{ideal_gold:,.1f} 万円", f"{ideal_cash:,.1f} 万円"],
-        "比率": [f"{target_orkan}%", f"{target_gold}%", f"{target_cash}%"]
-    })
-    st.dataframe(df_after)
-    
