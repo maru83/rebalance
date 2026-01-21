@@ -114,7 +114,7 @@ else:
     alloc_gold = additional_fund * (target_gold / 100)
     alloc_cash = additional_fund * (target_cash / 100)
     
-    # ステータス表示の微調整（配分がある場合は「積立」と表記）
+    # ステータス表示の微調整
     if alloc_orkan > 0: status_orkan = "🔵 積立 (比率配分)"
     if alloc_gold > 0: status_gold = "🔵 積立 (比率配分)"
     if alloc_cash > 0: status_cash = "🔵 積立 (比率配分)"
@@ -178,10 +178,16 @@ with col2:
         
         table_data = []
         for name, status, alloc in assets_info:
-            amount_str = f"{alloc:,.1f} 万円"
-            table_data.append([name, status, amount_str])
+            # 割合計算
+            ratio = (alloc / additional_fund * 100) if additional_fund > 0 else 0
             
-        df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額"])
+            amount_str = f"{alloc:,.1f} 万円"
+            ratio_str = f"{ratio:.1f} %"
+            
+            table_data.append([name, status, amount_str, ratio_str])
+            
+        # カラムに「配分比率」を追加
+        df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額", "配分比率"])
         st.table(df_res)
         
         # 具体的な手順
@@ -194,14 +200,14 @@ with col2:
         if invest_total > 0:
             st.write(f"- 証券口座で合計 **{invest_total:,.1f} 万円** の注文を出してください。")
             if alloc_orkan > 0:
-                st.write(f"  - うち **{alloc_orkan:,.1f} 万円** でオルカンを購入")
+                st.write(f"  - うち **{alloc_orkan:,.1f} 万円** ({alloc_orkan/additional_fund*100:.1f}%) でオルカンを購入")
             if alloc_gold > 0:
-                st.write(f"  - うち **{alloc_gold:,.1f} 万円** でゴールドを購入")
+                st.write(f"  - うち **{alloc_gold:,.1f} 万円** ({alloc_gold/additional_fund*100:.1f}%) でゴールドを購入")
     
     st.markdown("---")
 
     # --- VIX指数エリア ---
-    st.subheader("📉 株式市場の温度感")
+    st.subheader("📉 市場の温度感")
     
     vix = get_market_fear()
     if vix:
