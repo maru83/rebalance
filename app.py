@@ -1,12 +1,24 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-
 import yfinance as yf
-import datetime
+
+# --- 関数定義エリア ---
+
+def get_market_fear():
+    """Yahoo FinanceからVIX指数を取得する"""
+    try:
+        ticker = "^VIX"
+        # 1日分のデータを取得
+        data = yf.Ticker(ticker).history(period="1d")
+        if not data.empty:
+            return data['Close'].iloc[-1]
+    except Exception:
+        return None
+    return None
 
 # --- ページ設定 ---
-st.set_page_config(page_title="Annual Portfolio Rebalancer (Man-Yen)", layout="wide")
+st.set_page_config(page_title="Annual Portfolio Rebalancer", layout="wide")
 
 st.title("⚖️ ポートフォリオ・リバランス")
 st.markdown("年に一回、資産配分を目標比率に戻すために使ってください。")
@@ -74,8 +86,7 @@ with col1:
 
 with col2:
     st.subheader("🛠 リバランス指示書")
-    
-    st.write("目標比率に戻すために必要なアクションは以下の通りです。")
+    st.write("目標比率に戻すためのアクション：")
     
     # 結果を見やすく整形
     data = []
@@ -87,10 +98,10 @@ with col2:
         
         # 0.1万円（1000円）未満の差は無視する設定
         if val > 0.1: 
-            action = "🟢 買い (Buy)"
+            action = "🟢 買い (安値)"
             amount = f"{val:,.1f} 万円"
         elif val < -0.1: 
-            action = "🔴 売り (Sell)"
+            action = "🔴 売り (高値)"
             amount = f"{abs(val):,.1f} 万円"
         else:
             action = "⚪️ 維持 (Hold)"
@@ -103,34 +114,27 @@ with col2:
     # テーブル表示
     st.table(df_res)
     
-    # テキストでの具体的なアドバイス
-    st.markdown("### 📝 具体的な手順")
+    st.markdown("---")
+
+    # --- ここにVIX指数を移動 ---
+    st.subheader("📉 市場の温度感")
     
-    # 売り注文のリスト作成（0.1万円以上）
-    sells = [x for x in assets if x[1] < -0.1]
-    # 買い注文のリスト作成
-    buys = [x for x in assets if x[1] > 0.1]
-    
-    if not sells and not buys:
-        st.success("🎉 おめでとうございます！ポートフォリオは完璧なバランスです。")
+    vix = get_market_fear()
+    if vix:
+        # メイン画面用の表示 (st.metricを使用)
+        st.metric(label="VIX指数 (恐怖指数)", value=f"{vix:.2f}")
+        
+        # VIXの水準によるアドバイス
+        if vix > 30:
+            st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。安易な狼狽売りは避けましょう。")
+        elif vix > 20:
+            st.warning("⚠️ **警戒水準**\n\n少し市場が不安定です。値動きに注意してください。")
+        elif vix < 15:
+            st.success("✅ **楽観相場**\n\n市場は落ち着いていますが、株価が高すぎる可能性もあります。")
+        else:
+            st.info("ℹ️ **通常運転**\n\n平穏な相場です。淡々とリバランスを行いましょう。")
     else:
-        if sells:
-            st.write("**STEP 1: 超過分の売却（または移動）**")
-            for name, val in sells:
-                if name == "キャッシュ":
-                    st.write(f"- 銀行口座から **{abs(val):,.1f} 万円** を証券口座へ移動してください。")
-                else:
-                    st.write(f"- {name} を **{abs(val):,.1f} 万円** 分、売却してください。")
-        
-        st.write("") # 改行
-        
-        if buys:
-            st.write("**STEP 2: 不足分の購入**")
-            for name, val in buys:
-                if name == "キャッシュ":
-                    st.write(f"- 売却代金や資金を **{val:,.1f} 万円** 分、銀行口座（または無リスク資産）に戻して確保してください。")
-                else:
-                    st.write(f"- {name} を **{val:,.1f} 万円** 分、購入してください。")
+        st.caption("※VIX指数の取得に失敗しました")
 
 # --- シミュレーション ---
 with st.expander("詳細データ: リバランス後の姿"):
@@ -143,38 +147,3 @@ with st.expander("詳細データ: リバランス後の姿"):
     })
     st.dataframe(df_after)
     
-
-
-# --- 関数：市場データの取得 (VIX指数) ---
-def get_market_fear():
-    """Yahoo FinanceからVIX指数を取得する"""
-    try:
-        ticker = "^VIX"
-        # 1日分のデータを取得
-        data = yf.Ticker(ticker).history(period="1d")
-        if not data.empty:
-            return data['Close'].iloc[-1]
-    except Exception:
-        return None
-    return None
-
-# --- サイドバー：市場の温度感 ---
-st.sidebar.header("📉 市場の温度感")
-vix = get_market_fear()
-
-if vix:
-    st.sidebar.metric(label="VIX指数 (恐怖指数)", value=f"{vix:.2f}")
-    
-    # VIXの水準によるアドバイス
-    if vix > 30:
-        st.sidebar.error("⚠️ パニック相場\n(今は株が安売りされている買い場かもしれません)")
-    elif vix > 20:
-        st.sidebar.warning("警戒水準\n(少し市場が不安定です)")
-    elif vix < 15:
-        st.sidebar.success("楽観相場\n(株価が高すぎる可能性があります)")
-    else:
-        st.sidebar.info("通常運転\n(平穏な相場です)")
-else:
-    st.sidebar.caption("※VIX指数の取得に失敗しました")
-
-st.sidebar.markdown("---")
