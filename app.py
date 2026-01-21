@@ -20,8 +20,8 @@ def get_market_fear():
 # --- ページ設定 ---
 st.set_page_config(page_title="Annual Portfolio Allocator", layout="wide")
 
-st.title("⚖️ ポートフォリオ・リバランス (資金配分版)")
-st.markdown("今年投入する追加資金を、目標比率に近づくように自動配分します。")
+st.title("⚖️ ポートフォリオ・リバランス")
+st.markdown("今年投入する追加資金を配分します。\n\n**目標比率とのズレが許容範囲内（±5~10%）の場合は、ズレを埋めることよりも、目標比率通りの積立を優先します。**")
 
 # --- サイドバー：入力エリア ---
 st.sidebar.header("1. 目標比率の設定 (%)")
@@ -58,34 +58,68 @@ ideal_gold = projected_total_assets * (target_gold / 100)
 ideal_cash = projected_total_assets * (target_cash / 100)
 
 # 3. 現状とのギャップ (理想 - 現在) = 不足している金額
-gap_orkan = ideal_orkan - current_orkan
-gap_gold = ideal_gold - current_gold
-gap_cash = ideal_cash - current_cash
+raw_gap_orkan = ideal_orkan - current_orkan
+raw_gap_gold = ideal_gold - current_gold
+raw_gap_cash = ideal_cash - current_cash
+
+# --- 許容範囲の判定とギャップの調整 (Filtering) ---
+
+def check_tolerance(gap_val, target_pct, total_assets):
+    """
+    許容範囲内かどうかを判定し、範囲内ならGapを0にする
+    """
+    # 乖離率（全体資産に対するズレの％）の計算
+    deviation_pct = (abs(gap_val) / total_assets) * 100
+    
+    # しきい値の設定 (目標20%以下は±5%、それ以外は±10%)
+    threshold = 5.0 if target_pct <= 20 else 10.0
+    
+    is_within_tolerance = deviation_pct <= threshold
+    
+    # 許容範囲内なら、リバランスのためのギャップは「0」とみなす
+    adjusted_gap = 0 if is_within_tolerance else gap_val
+    
+    status_text = ""
+    if is_within_tolerance:
+        status_text = f"⚪️ 維持 (許容範囲内 ±{int(threshold)}%)"
+    elif gap_val > 0:
+        status_text = "🟢 買い (乖離大)"
+    else:
+        status_text = "🔴 売り (乖離大)"
+        
+    return adjusted_gap, status_text
+
+# 各資産の判定実施
+adj_gap_orkan, status_orkan = check_tolerance(raw_gap_orkan, target_orkan, projected_total_assets)
+adj_gap_gold, status_gold = check_tolerance(raw_gap_gold, target_gold, projected_total_assets)
+adj_gap_cash, status_cash = check_tolerance(raw_gap_cash, target_cash, projected_total_assets)
 
 # 4. 配分ロジック (Allocation Logic)
-# 不足分（プラス）だけを取り出す
-pos_gap_orkan = max(0, gap_orkan)
-pos_gap_gold = max(0, gap_gold)
-pos_gap_cash = max(0, gap_cash)
+
+# 調整後の「不足分（プラス）」だけを取り出す
+pos_gap_orkan = max(0, adj_gap_orkan)
+pos_gap_gold = max(0, adj_gap_gold)
+pos_gap_cash = max(0, adj_gap_cash)
 total_positive_gap = pos_gap_orkan + pos_gap_gold + pos_gap_cash
 
 # 追加資金の配分計算
-alloc_orkan = 0
-alloc_gold = 0
-alloc_cash = 0
-
 if total_positive_gap > 0:
-    # 不足分の比率に応じて資金を山分け
+    # A. 許容範囲を超えて不足している資産がある場合 → その穴埋めに優先配分
     alloc_orkan = additional_fund * (pos_gap_orkan / total_positive_gap)
     alloc_gold = additional_fund * (pos_gap_gold / total_positive_gap)
     alloc_cash = additional_fund * (pos_gap_cash / total_positive_gap)
 else:
-    # 全ての資産が超過している場合（稀なケース）は比率通り配分
+    # B. 全て許容範囲内（または全て超過）の場合 → 目標比率通りに「ニュートラル配分」
     alloc_orkan = additional_fund * (target_orkan / 100)
     alloc_gold = additional_fund * (target_gold / 100)
     alloc_cash = additional_fund * (target_cash / 100)
+    
+    # ステータス表示の微調整（配分がある場合は「積立」と表記）
+    if alloc_orkan > 0: status_orkan = "🔵 積立 (比率配分)"
+    if alloc_gold > 0: status_gold = "🔵 積立 (比率配分)"
+    if alloc_cash > 0: status_cash = "🔵 積立 (比率配分)"
 
-# 5. 購入後の予想資産額 (Future Value)
+# 5. 購入後の予想資産額
 future_orkan = current_orkan + alloc_orkan
 future_gold = current_gold + alloc_gold
 future_cash = current_cash + alloc_cash
@@ -98,14 +132,10 @@ col1, col2 = st.columns([1, 1.5])
 with col1:
     st.subheader("📊 ポートフォリオの変化")
     
-    # タブを作成して Before / After を切り替え可能に
     tab1, tab2 = st.tabs(["現在 (Before)", "購入後 (After)"])
-    
-    # 色設定（共通化）
     color_map = {'オルカン':'royalblue', 'ゴールド':'gold', 'キャッシュ':'lightgray'}
     
     with tab1:
-        # 現在の円グラフ
         df_current = pd.DataFrame({
             "Asset": ["オルカン", "ゴールド", "キャッシュ"],
             "Value": [current_orkan, current_gold, current_cash]
@@ -116,7 +146,6 @@ with col1:
         st.info(f"現在の総資産: **{current_orkan+current_gold+current_cash:,.1f} 万円**")
 
     with tab2:
-        # 購入後の予想円グラフ
         df_future = pd.DataFrame({
             "Asset": ["オルカン", "ゴールド", "キャッシュ"],
             "Value": [future_orkan, future_gold, future_cash]
@@ -125,10 +154,7 @@ with col1:
                      color='Asset', color_discrete_map=color_map)
         st.plotly_chart(fig_fut, use_container_width=True)
         
-        # 予想総資産と比率チェック
         st.success(f"購入後の総資産: **{future_total:,.1f} 万円**")
-        
-        # 目標との乖離チェック用
         st.caption("購入後の比率 vs 目標:")
         col_r1, col_r2, col_r3 = st.columns(3)
         col_r1.metric("オルカン", f"{future_orkan/future_total*100:.1f}%", f"目標 {target_orkan}%")
@@ -145,23 +171,15 @@ with col2:
         
         # テーブルデータの作成
         assets_info = [
-            ("オルカン (株式)", gap_orkan, alloc_orkan),
-            ("ゴールド (金)", gap_gold, alloc_gold),
-            ("キャッシュ (現金)", gap_cash, alloc_cash)
+            ("オルカン (株式)", status_orkan, alloc_orkan),
+            ("ゴールド (金)", status_gold, alloc_gold),
+            ("キャッシュ (現金)", status_cash, alloc_cash)
         ]
         
         table_data = []
-        for name, val, alloc in assets_info:
-            # 判定ロジック
-            if val > 0.1: 
-                action = "🟢 買い (安値)"
-            elif val < -0.1: 
-                action = "🔴 売り (高値)"
-            else:
-                action = "⚪️ 維持 (Hold)"
-            
+        for name, status, alloc in assets_info:
             amount_str = f"{alloc:,.1f} 万円"
-            table_data.append([name, action, amount_str])
+            table_data.append([name, status, amount_str])
             
         df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額"])
         st.table(df_res)
@@ -183,7 +201,7 @@ with col2:
     st.markdown("---")
 
     # --- VIX指数エリア ---
-    st.subheader("📉 市場の温度感")
+    st.subheader("📉 株式市場の温度感")
     
     vix = get_market_fear()
     if vix:
