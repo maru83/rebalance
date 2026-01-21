@@ -70,6 +70,10 @@ pos_gap_cash = max(0, gap_cash)
 total_positive_gap = pos_gap_orkan + pos_gap_gold + pos_gap_cash
 
 # 追加資金の配分計算
+alloc_orkan = 0
+alloc_gold = 0
+alloc_cash = 0
+
 if total_positive_gap > 0:
     # 不足分の比率に応じて資金を山分け
     alloc_orkan = additional_fund * (pos_gap_orkan / total_positive_gap)
@@ -81,26 +85,55 @@ else:
     alloc_gold = additional_fund * (target_gold / 100)
     alloc_cash = additional_fund * (target_cash / 100)
 
+# 5. 購入後の予想資産額 (Future Value)
+future_orkan = current_orkan + alloc_orkan
+future_gold = current_gold + alloc_gold
+future_cash = current_cash + alloc_cash
+future_total = future_orkan + future_gold + future_cash
+
 # --- メイン画面 ---
 
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
-    st.subheader("📊 現在のポートフォリオ")
+    st.subheader("📊 ポートフォリオの変化")
     
-    # 円グラフ用データ
-    df_chart = pd.DataFrame({
-        "Asset": ["オルカン", "ゴールド", "キャッシュ"],
-        "Value": [current_orkan, current_gold, current_cash]
-    })
+    # タブを作成して Before / After を切り替え可能に
+    tab1, tab2 = st.tabs(["現在 (Before)", "購入後 (After)"])
     
-    fig = px.pie(df_chart, values='Value', names='Asset', hole=0.4,
-                 color='Asset',
-                 color_discrete_map={'オルカン':'royalblue', 'ゴールド':'gold', 'キャッシュ':'lightgray'})
-    st.plotly_chart(fig, use_container_width=True)
+    # 色設定（共通化）
+    color_map = {'オルカン':'royalblue', 'ゴールド':'gold', 'キャッシュ':'lightgray'}
     
-    st.info(f"現在の総資産: **{current_orkan+current_gold+current_cash:,.1f} 万円**")
-    st.success(f"＋ 今回の追加: **{additional_fund:,.1f} 万円**")
+    with tab1:
+        # 現在の円グラフ
+        df_current = pd.DataFrame({
+            "Asset": ["オルカン", "ゴールド", "キャッシュ"],
+            "Value": [current_orkan, current_gold, current_cash]
+        })
+        fig_cur = px.pie(df_current, values='Value', names='Asset', hole=0.4,
+                     color='Asset', color_discrete_map=color_map)
+        st.plotly_chart(fig_cur, use_container_width=True)
+        st.info(f"現在の総資産: **{current_orkan+current_gold+current_cash:,.1f} 万円**")
+
+    with tab2:
+        # 購入後の予想円グラフ
+        df_future = pd.DataFrame({
+            "Asset": ["オルカン", "ゴールド", "キャッシュ"],
+            "Value": [future_orkan, future_gold, future_cash]
+        })
+        fig_fut = px.pie(df_future, values='Value', names='Asset', hole=0.4,
+                     color='Asset', color_discrete_map=color_map)
+        st.plotly_chart(fig_fut, use_container_width=True)
+        
+        # 予想総資産と比率チェック
+        st.success(f"購入後の総資産: **{future_total:,.1f} 万円**")
+        
+        # 目標との乖離チェック用
+        st.caption("購入後の比率 vs 目標:")
+        col_r1, col_r2, col_r3 = st.columns(3)
+        col_r1.metric("オルカン", f"{future_orkan/future_total*100:.1f}%", f"目標 {target_orkan}%")
+        col_r2.metric("ゴールド", f"{future_gold/future_total*100:.1f}%", f"目標 {target_gold}%")
+        col_r3.metric("キャッシュ", f"{future_cash/future_total*100:.1f}%", f"目標 {target_cash}%")
 
 with col2:
     st.subheader("🛠 リバランス指示書")
@@ -111,7 +144,6 @@ with col2:
         st.write(f"追加資金 **{additional_fund:,.1f} 万円** の最適な配分は以下の通りです。")
         
         # テーブルデータの作成
-        # リスト構成: [資産名, ギャップ値(判定用), 配分額(計算結果)]
         assets_info = [
             ("オルカン (株式)", gap_orkan, alloc_orkan),
             ("ゴールド (金)", gap_gold, alloc_gold),
@@ -128,17 +160,13 @@ with col2:
             else:
                 action = "⚪️ 維持 (Hold)"
             
-            # 配分額のフォーマット
             amount_str = f"{alloc:,.1f} 万円"
-            
             table_data.append([name, action, amount_str])
             
         df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額"])
-        
-        # テーブル表示
         st.table(df_res)
         
-        # 具体的なアドバイス
+        # 具体的な手順
         st.markdown("### 📝 具体的な手順")
         
         if alloc_cash > 0:
