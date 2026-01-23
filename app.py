@@ -2,16 +2,28 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import yfinance as yf
+import datetime
+import io
 
 # --- 関数定義エリア ---
+
+def get_market_fear():
+    """Yahoo FinanceからVIX指数を取得する"""
+    try:
+        ticker = "^VIX"
+        # 1日分のデータを取得
+        data = yf.Ticker(ticker).history(period="1d")
+        if not data.empty:
+            return data['Close'].iloc[-1]
+    except Exception:
+        return None
+    return None
 
 def get_vix_data(period="1y"):
     """Yahoo FinanceからVIX指数の履歴と現在値を取得する"""
     try:
         ticker = "^VIX"
-        # 過去のデータを取得
         data = yf.Ticker(ticker).history(period=period)
-        
         if not data.empty:
             current_value = data['Close'].iloc[-1]
             return current_value, data.reset_index()
@@ -38,10 +50,23 @@ if total_ratio != 100:
 
 st.sidebar.markdown("---")
 
-st.sidebar.header("2. 現在の評価額 (万円)")
-current_orkan = st.sidebar.number_input("オルカン評価額", value=650, step=10)
-current_gold = st.sidebar.number_input("ゴールド評価額", value=150, step=10)
+st.sidebar.header("2. 現在の評価額 & 元本 (万円)")
+st.sidebar.caption("損益計算のため、元本（投資額）も入力してください。")
+
+# オルカン
+current_orkan = st.sidebar.number_input("オルカン 評価額", value=650, step=10)
+principal_orkan = st.sidebar.number_input("オルカン 元本", value=500, step=10)
+
+# ゴールド
+st.sidebar.markdown("---") 
+current_gold = st.sidebar.number_input("ゴールド 評価額", value=150, step=10)
+principal_gold = st.sidebar.number_input("ゴールド 元本", value=100, step=10)
+
+# キャッシュ
+st.sidebar.markdown("---")
 current_cash = st.sidebar.number_input("現在の現金保有額", value=200, step=10)
+# キャッシュの元本は常に評価額と同じとみなす
+principal_cash = current_cash 
 
 st.sidebar.markdown("---")
 
@@ -67,18 +92,9 @@ raw_gap_cash = ideal_cash - current_cash
 # --- 許容範囲の判定とギャップの調整 (Filtering) ---
 
 def check_tolerance(gap_val, target_pct, total_assets):
-    """
-    許容範囲内かどうかを判定し、範囲内ならGapを0にする
-    """
-    # 乖離率の計算
     deviation_pct = (abs(gap_val) / total_assets) * 100
-    
-    # しきい値の設定 (目標20%以下は±5%、それ以外は±10%)
     threshold = 5.0 if target_pct <= 20 else 10.0
-    
     is_within_tolerance = deviation_pct <= threshold
-    
-    # 許容範囲内なら、リバランスのためのギャップは「0」とみなす
     adjusted_gap = 0 if is_within_tolerance else gap_val
     
     status_text = ""
@@ -91,32 +107,25 @@ def check_tolerance(gap_val, target_pct, total_assets):
         
     return adjusted_gap, status_text
 
-# 各資産の判定実施
 adj_gap_orkan, status_orkan = check_tolerance(raw_gap_orkan, target_orkan, projected_total_assets)
 adj_gap_gold, status_gold = check_tolerance(raw_gap_gold, target_gold, projected_total_assets)
 adj_gap_cash, status_cash = check_tolerance(raw_gap_cash, target_cash, projected_total_assets)
 
 # 4. 配分ロジック (Allocation Logic)
-
-# 調整後の「不足分（プラス）」だけを取り出す
 pos_gap_orkan = max(0, adj_gap_orkan)
 pos_gap_gold = max(0, adj_gap_gold)
 pos_gap_cash = max(0, adj_gap_cash)
 total_positive_gap = pos_gap_orkan + pos_gap_gold + pos_gap_cash
 
-# 追加資金の配分計算
 if total_positive_gap > 0:
-    # A. 許容範囲を超えて不足している資産がある場合 → その穴埋めに優先配分
     alloc_orkan = additional_fund * (pos_gap_orkan / total_positive_gap)
     alloc_gold = additional_fund * (pos_gap_gold / total_positive_gap)
     alloc_cash = additional_fund * (pos_gap_cash / total_positive_gap)
 else:
-    # B. 全て許容範囲内（または全て超過）の場合 → 目標比率通りに「ニュートラル配分」
     alloc_orkan = additional_fund * (target_orkan / 100)
     alloc_gold = additional_fund * (target_gold / 100)
     alloc_cash = additional_fund * (target_cash / 100)
     
-    # ステータス表示の微調整
     if alloc_orkan > 0: status_orkan = "🔵 積立 (比率配分)"
     if alloc_gold > 0: status_gold = "🔵 積立 (比率配分)"
     if alloc_cash > 0: status_cash = "🔵 積立 (比率配分)"
@@ -126,6 +135,24 @@ future_orkan = current_orkan + alloc_orkan
 future_gold = current_gold + alloc_gold
 future_cash = current_cash + alloc_cash
 future_total = future_orkan + future_gold + future_cash
+
+# --- 損益計算ロジック ---
+# オルカン
+profit_orkan = current_orkan - principal_orkan
+profit_rate_orkan = (profit_orkan / principal_orkan * 100) if principal_orkan > 0 else 0
+
+# ゴールド
+profit_gold = current_gold - principal_gold
+profit_rate_gold = (profit_gold / principal_gold * 100) if principal_gold > 0 else 0
+
+# 全体（キャッシュ含む）
+total_current = current_orkan + current_gold + current_cash
+total_principal = principal_orkan + principal_gold + principal_cash
+total_profit = total_current - total_principal
+total_profit_rate = (total_profit / total_principal * 100) if total_principal > 0 else 0
+
+# VIX取得（ここで取得しておく）
+current_vix, history_vix = get_vix_data(period="1y")
 
 # --- メイン画面 ---
 
@@ -138,6 +165,7 @@ with col1:
     color_map = {'オルカン':'royalblue', 'ゴールド':'gold', 'キャッシュ':'lightgray'}
     
     with tab1:
+        # 1. 円グラフを先に表示
         df_current = pd.DataFrame({
             "Asset": ["オルカン", "ゴールド", "キャッシュ"],
             "Value": [current_orkan, current_gold, current_cash]
@@ -145,7 +173,31 @@ with col1:
         fig_cur = px.pie(df_current, values='Value', names='Asset', hole=0.4,
                      color='Asset', color_discrete_map=color_map)
         st.plotly_chart(fig_cur, use_container_width=True)
-        st.info(f"現在の総資産: **{current_orkan+current_gold+current_cash:,.1f} 万円**")
+        
+        st.markdown("---")
+
+        # 2. 運用成績をグラフの下に表示
+        st.markdown("##### 運用成績")
+        
+        # 全体の損益
+        st.metric(
+            label="総資産 損益率",
+            value=f"{total_current:,.1f} 万円",
+            delta=f"{total_profit_rate:+.1f}% ({total_profit:+.1f} 万円)"
+        )
+        
+        # 個別の損益（2列で表示）
+        c1, c2 = st.columns(2)
+        c1.metric(
+            label="オルカン",
+            value=f"{current_orkan:,.1f} 万円",
+            delta=f"{profit_rate_orkan:+.1f}%"
+        )
+        c2.metric(
+            label="ゴールド",
+            value=f"{current_gold:,.1f} 万円",
+            delta=f"{profit_rate_gold:+.1f}%"
+        )
 
     with tab2:
         df_future = pd.DataFrame({
@@ -203,30 +255,66 @@ with col2:
                 st.write(f"  - うち **{alloc_gold:,.1f} 万円** ({alloc_gold/additional_fund*100:.1f}%) でゴールドを購入")
     
     st.markdown("---")
+    
+    # --- レポートCSV作成機能 ---
+    def create_report_csv(df_instructions, current_vix, additional_fund):
+        # メモリ上にテキストバッファを作成
+        output = io.StringIO()
+        
+        # 1. 基本情報
+        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        vix_str = f"{current_vix:.2f}" if current_vix else "取得失敗"
+        
+        output.write("【基本情報】\n")
+        output.write(f"ダウンロード日時,{now_str}\n")
+        output.write(f"VIX指数,{vix_str}\n")
+        output.write(f"追加資金合計,{additional_fund} 万円\n")
+        output.write("\n")
+        
+        # 2. 資産状況サマリー
+        output.write("【資産運用状況】\n")
+        summary_data = [
+            ["オルカン", current_orkan, principal_orkan, profit_orkan, f"{profit_rate_orkan:.1f}%"],
+            ["ゴールド", current_gold, principal_gold, profit_gold, f"{profit_rate_gold:.1f}%"],
+            ["キャッシュ", current_cash, principal_cash, 0, "0.0%"],
+            ["合計", total_current, total_principal, total_profit, f"{total_profit_rate:.1f}%"]
+        ]
+        df_summary = pd.DataFrame(summary_data, columns=["資産名", "評価額(万円)", "元本(万円)", "損益(万円)", "損益率"])
+        df_summary.to_csv(output, index=False)
+        output.write("\n")
+        
+        # 3. リバランス指示書
+        output.write("【リバランス配分指示】\n")
+        df_instructions.to_csv(output, index=False)
+        
+        # バッファの内容をutf-8-sigでエンコードして返す
+        return output.getvalue().encode('utf-8-sig')
+
+    if additional_fund > 0:
+        csv_data = create_report_csv(df_res, current_vix, additional_fund)
+        
+        st.download_button(
+            label="📥 詳細レポートをCSVでダウンロード",
+            data=csv_data,
+            file_name=f'portfolio_report_{datetime.date.today()}.csv',
+            mime='text/csv',
+        )
+
+    st.markdown("---")
 
     # --- VIX指数エリア（グラフ付き） ---
     st.subheader("📉 市場の温度感")
     
-    current_vix, history_vix = get_vix_data(period="1y")
-    
     if current_vix:
-        # メトリクス表示
         st.metric(label="現在のVIX指数", value=f"{current_vix:.2f}")
         
-        # グラフ描画
         if history_vix is not None:
             fig_vix = px.line(history_vix, x="Date", y="Close", title="VIX指数の推移 (過去1年)")
-            
-            # 警戒ライン（赤色・黄色）を追加
             fig_vix.add_hline(y=30, line_dash="dash", line_color="red", annotation_text="パニック (30)")
             fig_vix.add_hline(y=20, line_dash="dash", line_color="orange", annotation_text="警戒 (20)")
-            
-            # グラフの見た目を調整
             fig_vix.update_layout(xaxis_title="日付", yaxis_title="VIX", height=350)
-            
             st.plotly_chart(fig_vix, use_container_width=True)
 
-        # アドバイス
         if current_vix > 30:
             st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。積極的な配分を検討しても良いでしょう。")
         elif current_vix > 20:
