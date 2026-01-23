@@ -34,7 +34,7 @@ def get_vix_data(period="1y"):
 # --- ページ設定 ---
 st.set_page_config(page_title="Annual Portfolio Allocator", layout="wide")
 
-st.title("⚖️ リバランスアプリ")
+st.title("⚖️ ノーセルリバランスアプリ")
 st.markdown("今年投入する追加資金を配分します。\n\n**目標比率とのズレが許容範囲内（±5~10%）の場合は、ズレを埋めることよりも、目標比率通りの積立を優先します。**")
 
 # --- サイドバー：入力エリア ---
