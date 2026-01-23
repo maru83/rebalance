@@ -5,17 +5,19 @@ import yfinance as yf
 
 # --- 関数定義エリア ---
 
-def get_market_fear():
-    """Yahoo FinanceからVIX指数を取得する"""
+def get_vix_data(period="1y"):
+    """Yahoo FinanceからVIX指数の履歴と現在値を取得する"""
     try:
         ticker = "^VIX"
-        # 1日分のデータを取得
-        data = yf.Ticker(ticker).history(period="1d")
+        # 過去のデータを取得
+        data = yf.Ticker(ticker).history(period=period)
+        
         if not data.empty:
-            return data['Close'].iloc[-1]
+            current_value = data['Close'].iloc[-1]
+            return current_value, data.reset_index()
     except Exception:
-        return None
-    return None
+        return None, None
+    return None, None
 
 # --- ページ設定 ---
 st.set_page_config(page_title="Annual Portfolio Allocator", layout="wide")
@@ -68,7 +70,7 @@ def check_tolerance(gap_val, target_pct, total_assets):
     """
     許容範囲内かどうかを判定し、範囲内ならGapを0にする
     """
-    # 乖離率（全体資産に対するズレの％）の計算
+    # 乖離率の計算
     deviation_pct = (abs(gap_val) / total_assets) * 100
     
     # しきい値の設定 (目標20%以下は±5%、それ以外は±10%)
@@ -178,15 +180,11 @@ with col2:
         
         table_data = []
         for name, status, alloc in assets_info:
-            # 割合計算
             ratio = (alloc / additional_fund * 100) if additional_fund > 0 else 0
-            
             amount_str = f"{alloc:,.1f} 万円"
             ratio_str = f"{ratio:.1f} %"
-            
             table_data.append([name, status, amount_str, ratio_str])
             
-        # カラムに「配分比率」を追加
         df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額", "配分比率"])
         st.table(df_res)
         
@@ -206,20 +204,37 @@ with col2:
     
     st.markdown("---")
 
-    # --- VIX指数エリア ---
+    # --- VIX指数エリア（グラフ付き） ---
     st.subheader("📉 市場の温度感")
     
-    vix = get_market_fear()
-    if vix:
-        st.metric(label="VIX指数 (恐怖指数)", value=f"{vix:.2f}")
+    current_vix, history_vix = get_vix_data(period="1y")
+    
+    if current_vix:
+        # メトリクス表示
+        st.metric(label="現在のVIX指数", value=f"{current_vix:.2f}")
         
-        if vix > 30:
+        # グラフ描画
+        if history_vix is not None:
+            fig_vix = px.line(history_vix, x="Date", y="Close", title="VIX指数の推移 (過去1年)")
+            
+            # 警戒ライン（赤色・黄色）を追加
+            fig_vix.add_hline(y=30, line_dash="dash", line_color="red", annotation_text="パニック (30)")
+            fig_vix.add_hline(y=20, line_dash="dash", line_color="orange", annotation_text="警戒 (20)")
+            
+            # グラフの見た目を調整
+            fig_vix.update_layout(xaxis_title="日付", yaxis_title="VIX", height=350)
+            
+            st.plotly_chart(fig_vix, use_container_width=True)
+
+        # アドバイス
+        if current_vix > 30:
             st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。積極的な配分を検討しても良いでしょう。")
-        elif vix > 20:
+        elif current_vix > 20:
             st.warning("⚠️ **警戒水準**\n\n少し市場が不安定です。")
-        elif vix < 15:
+        elif current_vix < 15:
             st.success("✅ **楽観相場**\n\n株価が高すぎる可能性があります。高値掴みに注意してください。")
         else:
             st.info("ℹ️ **通常運転**\n\n平穏な相場です。計算通りの配分で問題ありません。")
+            
     else:
         st.caption("※VIX指数の取得に失敗しました")
