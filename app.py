@@ -48,7 +48,7 @@ st.sidebar.markdown("---")
 
 st.sidebar.header("2. 現在の評価額 (万円)")
 current_orkan = st.sidebar.number_input("オルカン 評価額", value=650, step=10)
-current_cash = st.sidebar.number_input("現在の現金保有額", value=200, step=10)
+current_cash = st.sidebar.number_input("現在のキャッシュ保有額", value=200, step=10)
 
 st.sidebar.markdown("---")
 
@@ -170,7 +170,7 @@ with col2:
         # テーブルデータの作成
         assets_info = [
             ("オルカン (株式)", status_orkan, bonus_to_orkan),
-            ("キャッシュ (現金)", status_cash, bonus_to_cash)
+            ("キャッシュ (国債)", status_cash, bonus_to_cash)
         ]
         
         table_data = []
