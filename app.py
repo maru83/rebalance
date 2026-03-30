@@ -8,10 +8,8 @@ import io
 # --- 関数定義エリア ---
 
 def get_market_fear():
-    """Yahoo FinanceからVIX指数を取得する"""
     try:
         ticker = "^VIX"
-        # 1日分のデータを取得
         data = yf.Ticker(ticker).history(period="1d")
         if not data.empty:
             return data['Close'].iloc[-1]
@@ -20,7 +18,6 @@ def get_market_fear():
     return None
 
 def get_vix_data(period="1y"):
-    """Yahoo FinanceからVIX指数の履歴と現在値を取得する"""
     try:
         ticker = "^VIX"
         data = yf.Ticker(ticker).history(period=period)
@@ -34,124 +31,97 @@ def get_vix_data(period="1y"):
 # --- ページ設定 ---
 st.set_page_config(page_title="Annual Portfolio Allocator", layout="wide")
 
-st.title("⚖️ ノーセルリバランスアプリ")
-st.markdown("今年投入する追加資金を配分します。\n\n**目標比率とのズレが許容範囲内（±5~10%）の場合は、ズレを埋めることよりも、目標比率通りの積立を優先します。**")
+st.title("⚖️ ノーセルリバランス")
+st.markdown("毎月のオルカン積立をベースとし、**今年のボーナスをオルカンとキャッシュにどう配分すれば目標比率に近づくか**を自動計算します。\n\n※少しでも目標比率からズレている場合は、ボーナスを使って重点的に補填します（許容値0%）。")
 
 # --- サイドバー：入力エリア ---
 st.sidebar.header("1. 目標比率の設定 (%)")
-target_orkan = st.sidebar.number_input("オルカン (株式)", value=60, step=5)
-target_gold = st.sidebar.number_input("ゴールド (金)", value=10, step=5)
+target_orkan = st.sidebar.number_input("オルカン (株式)", value=70, step=5)
 target_cash = st.sidebar.number_input("キャッシュ (現金)", value=30, step=5)
 
 # 合計チェック
-total_ratio = target_orkan + target_gold + target_cash
+total_ratio = target_orkan + target_cash
 if total_ratio != 100:
     st.sidebar.error(f"合計が {total_ratio}% です。100%になるように調整してください。")
 
 st.sidebar.markdown("---")
 
-st.sidebar.header("2. 現在の評価額 & 元本 (万円)")
-st.sidebar.caption("損益計算のため、元本（投資額）も入力してください。")
-
-# オルカン
+st.sidebar.header("2. 現在の評価額 (万円)")
 current_orkan = st.sidebar.number_input("オルカン 評価額", value=650, step=10)
-principal_orkan = st.sidebar.number_input("オルカン 元本", value=500, step=10)
-
-# ゴールド
-st.sidebar.markdown("---") 
-current_gold = st.sidebar.number_input("ゴールド 評価額", value=150, step=10)
-principal_gold = st.sidebar.number_input("ゴールド 元本", value=100, step=10)
-
-# キャッシュ
-st.sidebar.markdown("---")
 current_cash = st.sidebar.number_input("現在の現金保有額", value=200, step=10)
-# キャッシュの元本は常に評価額と同じとみなす
-principal_cash = current_cash 
 
 st.sidebar.markdown("---")
 
-st.sidebar.header("3. 追加資金 (万円)")
-st.sidebar.caption("今年一年で追加する資金（積立総額＋ボーナス＋貯金）を入力してください。")
-additional_fund = st.sidebar.number_input("今回投入する資金合計", value=100, step=10)
+st.sidebar.header("3. 今年の積立＆ボーナス (万円)")
+st.sidebar.caption("毎月の積立額と、今年見込めるボーナスの総額を入力してください。")
+monthly_invest = st.sidebar.number_input("毎月のオルカン積立額", value=5.0, step=1.0)
+bonus_total = st.sidebar.number_input("今年のボーナス見込み額 (合計)", value=100.0, step=10.0)
 
 # --- 計算ロジック ---
 
-# 1. リバランス後の総資産予測 (現在額 + 追加資金)
-projected_total_assets = current_orkan + current_gold + current_cash + additional_fund
+# 1. 毎月積立による1年後のベース資産（ボーナス配分前）
+yearly_orkan_invest = monthly_invest * 12
+base_orkan = current_orkan + yearly_orkan_invest
+base_cash = current_cash
 
-# 2. リバランス後にあるべき理想の金額 (Target Amount)
-ideal_orkan = projected_total_assets * (target_orkan / 100)
-ideal_gold = projected_total_assets * (target_gold / 100)
-ideal_cash = projected_total_assets * (target_cash / 100)
+# 2. ボーナスを含めた1年後の「予想総資産」
+future_total = base_orkan + base_cash + bonus_total
 
-# 3. 現状とのギャップ (理想 - 現在) = 不足している金額
-raw_gap_orkan = ideal_orkan - current_orkan
-raw_gap_gold = ideal_gold - current_gold
-raw_gap_cash = ideal_cash - current_cash
+# 3. 予想総資産に対する「あるべき理想の金額」
+ideal_orkan = future_total * (target_orkan / 100)
+ideal_cash = future_total * (target_cash / 100)
 
-# --- 許容範囲の判定とギャップの調整 (Filtering) ---
+# 4. ベース資産と理想額のギャップ（＝ボーナスで埋めるべき不足額）
+raw_gap_orkan = ideal_orkan - base_orkan
+raw_gap_cash = ideal_cash - base_cash
 
+# --- 許容範囲の判定とギャップの調整 ---
 def check_tolerance(gap_val, target_pct, total_assets):
-    deviation_pct = (abs(gap_val) / total_assets) * 100
-    threshold = 5.0 if target_pct <= 20 else 10.0
-    is_within_tolerance = deviation_pct <= threshold
+    deviation_pct = (abs(gap_val) / total_assets) * 100 if total_assets > 0 else 0
+    # 許容範囲を0%に設定（計算誤差を考慮し 0.001% 以下はズレなしとみなす）
+    is_within_tolerance = deviation_pct <= 0.001
     adjusted_gap = 0 if is_within_tolerance else gap_val
     
     status_text = ""
     if is_within_tolerance:
-        status_text = f"⚪️ 維持 (許容範囲内 ±{int(threshold)}%)"
+        status_text = "⚪️ 維持 (ズレなし)"
     elif gap_val > 0:
-        status_text = "🟢 買い (乖離大)"
+        status_text = "🟢 重点配分 (不足を補填)"
     else:
-        status_text = "🔴 売り (乖離大)"
+        status_text = "🔴 配分なし (既に超過)"
         
     return adjusted_gap, status_text
 
-adj_gap_orkan, status_orkan = check_tolerance(raw_gap_orkan, target_orkan, projected_total_assets)
-adj_gap_gold, status_gold = check_tolerance(raw_gap_gold, target_gold, projected_total_assets)
-adj_gap_cash, status_cash = check_tolerance(raw_gap_cash, target_cash, projected_total_assets)
+adj_gap_orkan, status_orkan = check_tolerance(raw_gap_orkan, target_orkan, future_total)
+adj_gap_cash, status_cash = check_tolerance(raw_gap_cash, target_cash, future_total)
 
-# 4. 配分ロジック (Allocation Logic)
+# 5. ボーナスの配分計算
 pos_gap_orkan = max(0, adj_gap_orkan)
-pos_gap_gold = max(0, adj_gap_gold)
 pos_gap_cash = max(0, adj_gap_cash)
-total_positive_gap = pos_gap_orkan + pos_gap_gold + pos_gap_cash
+total_positive_gap = pos_gap_orkan + pos_gap_cash
 
-if total_positive_gap > 0:
-    alloc_orkan = additional_fund * (pos_gap_orkan / total_positive_gap)
-    alloc_gold = additional_fund * (pos_gap_gold / total_positive_gap)
-    alloc_cash = additional_fund * (pos_gap_cash / total_positive_gap)
-else:
-    alloc_orkan = additional_fund * (target_orkan / 100)
-    alloc_gold = additional_fund * (target_gold / 100)
-    alloc_cash = additional_fund * (target_cash / 100)
-    
-    if alloc_orkan > 0: status_orkan = "🔵 積立 (比率配分)"
-    if alloc_gold > 0: status_gold = "🔵 積立 (比率配分)"
-    if alloc_cash > 0: status_cash = "🔵 積立 (比率配分)"
+bonus_to_orkan = 0.0
+bonus_to_cash = 0.0
 
-# 5. 購入後の予想資産額
-future_orkan = current_orkan + alloc_orkan
-future_gold = current_gold + alloc_gold
-future_cash = current_cash + alloc_cash
-future_total = future_orkan + future_gold + future_cash
+if bonus_total > 0:
+    if total_positive_gap > 0:
+        # ギャップに応じてボーナスを傾斜配分
+        bonus_to_orkan = bonus_total * (pos_gap_orkan / total_positive_gap)
+        bonus_to_cash = bonus_total * (pos_gap_cash / total_positive_gap)
+    else:
+        # 完全に一致しているなら、ボーナスは目標比率通りに配分
+        bonus_to_orkan = bonus_total * (target_orkan / 100)
+        bonus_to_cash = bonus_total * (target_cash / 100)
+        status_orkan = "🔵 比率配分 (完全一致)"
+        status_cash = "🔵 比率配分 (完全一致)"
 
-# --- 損益計算ロジック ---
-# オルカン
-profit_orkan = current_orkan - principal_orkan
-profit_rate_orkan = (profit_orkan / principal_orkan * 100) if principal_orkan > 0 else 0
+# 6. ボーナス配分後の最終予想資産額
+future_orkan = base_orkan + bonus_to_orkan
+future_cash = base_cash + bonus_to_cash
 
-# ゴールド
-profit_gold = current_gold - principal_gold
-profit_rate_gold = (profit_gold / principal_gold * 100) if principal_gold > 0 else 0
+total_current = current_orkan + current_cash
 
-# 全体（キャッシュ含む）
-total_current = current_orkan + current_gold + current_cash
-total_principal = principal_orkan + principal_gold + principal_cash
-total_profit = total_current - total_principal
-total_profit_rate = (total_profit / total_principal * 100) if total_principal > 0 else 0
-
-# VIX取得（ここで取得しておく）
+# VIX取得
 current_vix, history_vix = get_vix_data(period="1y")
 
 # --- メイン画面 ---
@@ -161,144 +131,117 @@ col1, col2 = st.columns([1, 1.5])
 with col1:
     st.subheader("📊 アセットアロケーション")
     
-    tab1, tab2 = st.tabs(["現在 (Before)", "購入後 (After)"])
-    color_map = {'オルカン':'royalblue', 'ゴールド':'gold', 'キャッシュ':'lightgray'}
+    tab1, tab2 = st.tabs(["現在 (Before)", "1年後 (After)"])
+    color_map = {'オルカン':'royalblue', 'キャッシュ':'lightgray'}
     
     with tab1:
-        # 1. 円グラフを先に表示
         df_current = pd.DataFrame({
-            "Asset": ["オルカン", "ゴールド", "キャッシュ"],
-            "Value": [current_orkan, current_gold, current_cash]
+            "Asset": ["オルカン", "キャッシュ"],
+            "Value": [current_orkan, current_cash]
         })
         fig_cur = px.pie(df_current, values='Value', names='Asset', hole=0.4,
                      color='Asset', color_discrete_map=color_map)
         st.plotly_chart(fig_cur, use_container_width=True)
-        
-        st.markdown("---")
-
-        # 2. 運用成績をグラフの下に表示
-        st.markdown("##### 運用成績")
-        
-        # 全体の損益
-        st.metric(
-            label="総資産 損益率",
-            value=f"{total_current:,.1f} 万円",
-            delta=f"{total_profit_rate:+.1f}% ({total_profit:+.1f} 万円)"
-        )
-        
-        # 個別の損益（2列で表示）
-        c1, c2 = st.columns(2)
-        c1.metric(
-            label="オルカン",
-            value=f"{current_orkan:,.1f} 万円",
-            delta=f"{profit_rate_orkan:+.1f}%"
-        )
-        c2.metric(
-            label="ゴールド",
-            value=f"{current_gold:,.1f} 万円",
-            delta=f"{profit_rate_gold:+.1f}%"
-        )
+        st.info(f"現在の総資産: **{total_current:,.1f} 万円**")
 
     with tab2:
         df_future = pd.DataFrame({
-            "Asset": ["オルカン", "ゴールド", "キャッシュ"],
-            "Value": [future_orkan, future_gold, future_cash]
+            "Asset": ["オルカン", "キャッシュ"],
+            "Value": [future_orkan, future_cash]
         })
         fig_fut = px.pie(df_future, values='Value', names='Asset', hole=0.4,
                      color='Asset', color_discrete_map=color_map)
         st.plotly_chart(fig_fut, use_container_width=True)
         
-        st.success(f"購入後の総資産: **{future_total:,.1f} 万円**")
-        st.caption("購入後の比率 vs 目標:")
-        col_r1, col_r2, col_r3 = st.columns(3)
+        st.success(f"1年後の予想総資産: **{future_total:,.1f} 万円**")
+        st.caption("1年後の比率 vs 目標:")
+        col_r1, col_r2 = st.columns(2)
         col_r1.metric("オルカン", f"{future_orkan/future_total*100:.1f}%", f"目標 {target_orkan}%")
-        col_r2.metric("ゴールド", f"{future_gold/future_total*100:.1f}%", f"目標 {target_gold}%")
-        col_r3.metric("キャッシュ", f"{future_cash/future_total*100:.1f}%", f"目標 {target_cash}%")
+        col_r2.metric("キャッシュ", f"{future_cash/future_total*100:.1f}%", f"目標 {target_cash}%")
 
 with col2:
-    st.subheader("🛠 リバランス指示書")
+    st.subheader("🛠 配分指示書")
     
-    if additional_fund <= 0:
-        st.warning("左側のサイドバーで「追加資金」を入力してください。")
+    if bonus_total <= 0:
+        st.warning("ボーナス見込み額が0円に設定されています。ボーナスによる調整は行われません。")
     else:
-        st.write(f"追加資金 **{additional_fund:,.1f} 万円** の最適な配分は以下の通りです。")
+        st.write(f"今年のボーナス **{bonus_total:,.1f} 万円** の最適な配分は以下の通りです。")
         
         # テーブルデータの作成
         assets_info = [
-            ("オルカン (株式)", status_orkan, alloc_orkan),
-            ("ゴールド (金)", status_gold, alloc_gold),
-            ("キャッシュ (現金)", status_cash, alloc_cash)
+            ("オルカン (株式)", status_orkan, bonus_to_orkan),
+            ("キャッシュ (現金)", status_cash, bonus_to_cash)
         ]
         
         table_data = []
         for name, status, alloc in assets_info:
-            ratio = (alloc / additional_fund * 100) if additional_fund > 0 else 0
+            ratio = (alloc / bonus_total * 100) if bonus_total > 0 else 0
             amount_str = f"{alloc:,.1f} 万円"
             ratio_str = f"{ratio:.1f} %"
             table_data.append([name, status, amount_str, ratio_str])
             
-        df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "今回配分額", "配分比率"])
+        df_res = pd.DataFrame(table_data, columns=["資産クラス", "判定 (Status)", "ボーナス配分額", "配分比率"])
         st.table(df_res)
         
-        # 具体的な手順
-        st.markdown("### 📝 具体的な手順")
-        
-        if alloc_cash > 0:
-             st.write(f"- 銀行口座に **{alloc_cash:,.1f} 万円** をそのまま貯金（または国債購入）してください。")
-             
-        invest_total = alloc_orkan + alloc_gold
-        if invest_total > 0:
-            st.write(f"- 証券口座で合計 **{invest_total:,.1f} 万円** の注文を出してください。")
-            if alloc_orkan > 0:
-                st.write(f"  - うち **{alloc_orkan:,.1f} 万円** ({alloc_orkan/additional_fund*100:.1f}%) でオルカンを購入")
-            if alloc_gold > 0:
-                st.write(f"  - うち **{alloc_gold:,.1f} 万円** ({alloc_gold/additional_fund*100:.1f}%) でゴールドを購入")
+    # 具体的な手順
+    st.markdown("### 📝 手順")
+    
+    st.write("**1. 毎月の自動積立（固定）**")
+    st.write(f"- 証券口座にて、毎月 **{monthly_invest:,.1f} 万円** のオルカン積立を継続してください。（年間 {yearly_orkan_invest:,.1f} 万円）")
+    
+    st.write("") # 改行
+    
+    st.write("**2. ボーナスの振り分け**")
+    if bonus_total > 0:
+        if bonus_to_orkan > 0:
+            st.write(f"-**{bonus_to_orkan:,.1f} 万円** をオルカンのスポット購入に回してください。")
+        if bonus_to_cash > 0:
+            st.write(f"-**{bonus_to_cash:,.1f} 万円** を個人向け国債の購入に回してください")
+    else:
+        st.write("- ボーナスによる追加の振り分けはありません。")
     
     st.markdown("---")
     
     # --- レポートCSV作成機能 ---
-    def create_report_csv(df_instructions, current_vix, additional_fund):
-        # メモリ上にテキストバッファを作成
+    def create_report_csv(df_instructions, current_vix, bonus_orkan, bonus_cash, total_bonus, yearly_orkan):
         output = io.StringIO()
         
-        # 1. 基本情報
         now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         vix_str = f"{current_vix:.2f}" if current_vix else "取得失敗"
         
         output.write("【基本情報】\n")
         output.write(f"ダウンロード日時,{now_str}\n")
         output.write(f"VIX指数,{vix_str}\n")
-        output.write(f"追加資金合計,{additional_fund} 万円\n")
+        output.write(f"毎月のオルカン積立額,{monthly_invest} 万円 (年間 {yearly_orkan} 万円)\n")
+        output.write(f"ボーナス見込み額,{total_bonus} 万円\n")
         output.write("\n")
         
-        # 2. 資産状況サマリー
-        output.write("【資産運用状況】\n")
+        output.write("【現在の資産状況】\n")
         summary_data = [
-            ["オルカン", current_orkan, principal_orkan, profit_orkan, f"{profit_rate_orkan:.1f}%"],
-            ["ゴールド", current_gold, principal_gold, profit_gold, f"{profit_rate_gold:.1f}%"],
-            ["キャッシュ", current_cash, principal_cash, 0, "0.0%"],
-            ["合計", total_current, total_principal, total_profit, f"{total_profit_rate:.1f}%"]
+            ["オルカン", current_orkan],
+            ["キャッシュ", current_cash],
+            ["合計", total_current]
         ]
-        df_summary = pd.DataFrame(summary_data, columns=["資産名", "評価額(万円)", "元本(万円)", "損益(万円)", "損益率"])
+        df_summary = pd.DataFrame(summary_data, columns=["資産名", "現在の評価額(万円)"])
         df_summary.to_csv(output, index=False)
         output.write("\n")
         
-        # 3. リバランス指示書
-        output.write("【リバランス配分指示】\n")
-        df_instructions.to_csv(output, index=False)
+        output.write("【ボーナス配分指示】\n")
+        if total_bonus > 0:
+            df_instructions.to_csv(output, index=False)
+        else:
+            output.write("ボーナス配分なし\n")
         
-        # バッファの内容をutf-8-sigでエンコードして返す
         return output.getvalue().encode('utf-8-sig')
 
-    if additional_fund > 0:
-        csv_data = create_report_csv(df_res, current_vix, additional_fund)
-        
-        st.download_button(
-            label="📥 詳細レポートをCSVでダウンロード",
-            data=csv_data,
-            file_name=f'portfolio_report_{datetime.date.today()}.csv',
-            mime='text/csv',
-        )
+    csv_data = create_report_csv(df_res if bonus_total > 0 else pd.DataFrame(), current_vix, bonus_to_orkan, bonus_to_cash, bonus_total, yearly_orkan_invest)
+    
+    st.download_button(
+        label="📥 詳細レポートをCSVでダウンロード",
+        data=csv_data,
+        file_name=f'portfolio_plan_{datetime.date.today()}.csv',
+        mime='text/csv',
+    )
 
     st.markdown("---")
 
@@ -316,7 +259,7 @@ with col2:
             st.plotly_chart(fig_vix, use_container_width=True)
 
         if current_vix > 30:
-            st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。積極的な配分を検討しても良いでしょう。")
+            st.error("⚠️ **パニック相場**\n\n今は株が安売りされている「買い場」かもしれません。ボーナスの株式への配分を強気に見直すのも一考です。")
         elif current_vix > 20:
             st.warning("⚠️ **警戒水準**\n\n少し市場が不安定です。")
         elif current_vix < 15:
